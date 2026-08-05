@@ -2,14 +2,22 @@
 
 Run with: odoo-mcp   (after `pip install -e .`)
 or:       python -m odoo_mcp.server
+
+Transport is chosen by ODOO_MCP_TRANSPORT (default "stdio"):
+  stdio  -- local process spawned by Claude Desktop/Code. Not reachable
+            over the network at all; no separate auth needed.
+  http   -- streamable-HTTP server for remote/ChatGPT use. Requires
+            ODOO_MCP_BEARER_TOKEN (fails closed otherwise -- see README).
 """
 import logging
+import os
 import sys
 
 from mcp.server.fastmcp import FastMCP
 
 from .client import OdooClient
 from .config import OdooConfig, OdooConfigError
+from .http_auth import BearerAuthMiddleware
 from .tools import accounting, boq, generic, reports
 
 logging.basicConfig(level=logging.INFO, stream=sys.stderr)
@@ -46,9 +54,46 @@ def build_server() -> FastMCP:
     return mcp
 
 
+def run_http(server: FastMCP) -> None:
+    """Serve the MCP app over streamable-HTTP, behind a bearer-token gate.
+
+    Fails closed: with no internal restrictions of its own, this server
+    must never listen on a network port with no auth in front of it.
+    """
+    import uvicorn
+
+    token = os.environ.get("ODOO_MCP_BEARER_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError(
+            "ODOO_MCP_BEARER_TOKEN must be set to run over HTTP -- this "
+            "server has no internal restrictions, so an unauthenticated "
+            "network port would let anyone reach your Odoo data. "
+            "Generate one with: "
+            "python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+        )
+
+    app = server.streamable_http_app()
+    protected_app = BearerAuthMiddleware(app, token)
+
+    host = os.environ.get("ODOO_MCP_HOST", "127.0.0.1")
+    port = int(os.environ.get("ODOO_MCP_PORT", "8000"))
+    _logger.info("Serving streamable-HTTP on %s:%s (bearer-token protected)",
+                host, port)
+    config = uvicorn.Config(protected_app, host=host, port=port,
+                            log_level="info")
+    uvicorn.Server(config).run()
+
+
 def main() -> None:
     server = build_server()
-    server.run()
+    transport = os.environ.get("ODOO_MCP_TRANSPORT", "stdio").strip().lower()
+    if transport == "stdio":
+        server.run()
+    elif transport in ("http", "streamable-http"):
+        run_http(server)
+    else:
+        raise RuntimeError(
+            f"Unknown ODOO_MCP_TRANSPORT={transport!r}; use 'stdio' or 'http'.")
 
 
 if __name__ == "__main__":

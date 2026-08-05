@@ -41,7 +41,9 @@ but it means:
 src/odoo_mcp/
   client.py     Odoo XML-RPC wrapper (auth, generic CRUD, error mapping)
   config.py     Reads connection + safety-valve settings from the environment
-  server.py     MCP server entrypoint; registers every tool module below
+  server.py     MCP server entrypoint; registers every tool module below;
+               dispatches to stdio or HTTP transport
+  http_auth.py  Bearer-token ASGI middleware, used only in HTTP transport
   tools/
     generic.py     odoo_search_read / odoo_create / odoo_write / odoo_unlink /
                    odoo_call_method / odoo_fields_get -- works against ANY
@@ -96,6 +98,15 @@ code to change them):
 | `ODOO_MCP_ALLOW_POST` | `true` | posting invoices/journal entries, registering payments |
 | `ODOO_MCP_ALLOW_RECONCILE` | `true` | `reconcile_lines` |
 
+Transport (optional):
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ODOO_MCP_TRANSPORT` | `stdio` | `stdio` or `http` |
+| `ODOO_MCP_BEARER_TOKEN` | *(none)* | **required** when `ODOO_MCP_TRANSPORT=http` -- server refuses to start over HTTP without it |
+| `ODOO_MCP_HOST` | `127.0.0.1` | HTTP bind address |
+| `ODOO_MCP_PORT` | `8000` | HTTP bind port |
+
 ## Connecting it to Claude
 
 **Claude Desktop / Claude Code** -- add to your MCP config
@@ -120,19 +131,39 @@ code to change them):
 (Run `pip install -e .` first so the `odoo-mcp` command exists on PATH, or
 use the full path to `python -m odoo_mcp.server` instead of `odoo-mcp`.)
 
-## Connecting it to ChatGPT
+## Running it on a server (HTTP transport, for ChatGPT or remote access)
 
-ChatGPT's MCP/connector support expects a server reachable over HTTP
-(SSE or streamable-HTTP transport), not a local stdio process spawned by
-the client. This server currently runs over stdio (`server.run()` in
-`server.py`, the simplest and most portable transport for local use with
-Claude Desktop/Code). To expose it to ChatGPT, run it behind an HTTP
-transport instead -- swap `mcp.run()` for `mcp.run(transport="streamable-http")`
-(supported by the `FastMCP` class used here) and put it behind your own
-auth (e.g. a reverse proxy requiring a bearer token) before exposing any
-port publicly, since this server's own security boundary is entirely
-"whatever Odoo user it authenticates as" -- it does not gate *who* can call
-it over the network on its own.
+ChatGPT's MCP/connector support (and any remote Claude session) needs a
+server reachable over HTTP, not a local stdio process. Set the transport
+and a bearer token, then run it:
+
+```bash
+export ODOO_MCP_TRANSPORT=http
+export ODOO_MCP_BEARER_TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+echo "Save this token -- callers must send it as: Authorization: Bearer $ODOO_MCP_BEARER_TOKEN"
+odoo-mcp
+# or: python -m odoo_mcp.server
+```
+
+This serves `POST /mcp` (streamable-HTTP) on `ODOO_MCP_HOST:ODOO_MCP_PORT`
+(default `127.0.0.1:8000`), gated by a self-contained ASGI middleware
+(`http_auth.py`) that rejects any request without an exact
+`Authorization: Bearer <token>` match -- **the server refuses to start
+over HTTP at all if `ODOO_MCP_BEARER_TOKEN` is unset**, since this server
+has no other access control of its own.
+
+Before pointing a real client at it:
+
+- **Keep the bind address at `127.0.0.1`** and put a reverse proxy
+  (nginx, Caddy, Cloudflare Tunnel) in front for TLS + a real domain --
+  this process speaks plain HTTP and does not terminate TLS itself.
+- The bearer token is the *entire* network-facing security boundary here
+  (Odoo's own access rights are the boundary behind it). Rotate it if it
+  ever leaks, and don't put it in a URL, query string, or client-side
+  code -- header only.
+- Configure your MCP client (ChatGPT connector settings, or a remote
+  Claude MCP config) to call `https://your-domain/mcp` with that bearer
+  token as its auth header.
 
 ## What is NOT here
 
