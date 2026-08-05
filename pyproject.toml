@@ -17,6 +17,7 @@ dependencies = [
     # since http_auth.py / the HTTP entrypoint import them directly.
     "starlette>=0.37",
     "uvicorn>=0.30",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]

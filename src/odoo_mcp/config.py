@@ -5,11 +5,27 @@ See .env.example for the variables this reads.
 """
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 
 class OdooConfigError(RuntimeError):
     """Raised when required Odoo connection environment variables are
     missing or malformed."""
+
+
+def _load_dotenv_files() -> None:
+    """Load a .env file if one exists, without overriding a real
+    environment variable that's already set (e.g. one an MCP client's own
+    config passed in) -- .env is only ever a fallback.
+
+    Tries the current working directory (and its parents) first, then
+    this project's own root explicitly, since an MCP client may launch
+    this process from an arbitrary working directory."""
+    load_dotenv(override=False)
+    project_root_env = Path(__file__).resolve().parent.parent.parent / ".env"
+    load_dotenv(project_root_env, override=False)
 
 
 @dataclass(frozen=True)
@@ -27,6 +43,7 @@ class OdooConfig:
 
     @classmethod
     def from_env(cls) -> "OdooConfig":
+        _load_dotenv_files()
         url = os.environ.get("ODOO_URL", "").strip()
         db = os.environ.get("ODOO_DB", "").strip()
         username = os.environ.get("ODOO_USERNAME", "").strip()

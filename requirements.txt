@@ -1,3 +1,4 @@
 mcp>=1.2.0,<2.0.0
 starlette>=0.37
 uvicorn>=0.30
+python-dotenv>=1.0
